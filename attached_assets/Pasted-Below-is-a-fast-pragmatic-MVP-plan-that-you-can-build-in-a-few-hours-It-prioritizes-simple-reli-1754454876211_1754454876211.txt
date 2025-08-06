@@ -1,0 +1,432 @@
+Below is a fast, pragmatic MVP plan that you can build in a few hours. It prioritizes **simple, reliable realtime sync**, **presence (cursors & selections)**, and **persistence**—with a Node/Express backend and Neon (serverless Postgres).
+
+---
+
+## 0) Scope the MVP (what’s in / out)
+
+**In**
+
+* Join a “room” (document) via URL: `/doc/:id`
+* Realtime collaborative editing
+* Remote cursors & selections with user names/colors
+* Autosave to Neon + load on reconnect/server restart
+* Basic “last saved at” indicator
+* Anonymous users (ephemeral name)
+
+**Out (for speed)**
+
+* Auth & permissions
+* Multi-file projects / folders
+* Code execution/runner, LSP, linting
+* Rich presence (avatars), comments, chat
+
+---
+
+## 1) High-level architecture
+
+```
+[React + TypeScript + Tailwind]
+     |
+     |  WebSocket (y-websocket protocol)
+     v
+[Express (Node) + ws]  ——>  [Yjs document in memory per room]
+     |                               |
+     | (HTTP REST)                   |  periodic debounce save/load
+     v                               v
+            [Neon (serverless Postgres)]
+```
+
+* **CRDT:** Yjs (conflict-free, offline-friendly)
+* **Realtime transport:** y-websocket server (mounted in your Express process using `ws`)
+* **Editor:** Monaco (fast to integrate, great code editing UX)
+* **Presence:** Yjs “awareness” (broadcast cursor/selection + ephemeral user info)
+* **Persistence:** On the server, keep a `Y.Doc` per room in memory; periodically **autosave** to Neon. On first client connect (or server boot), **hydrate** from Neon.
+
+---
+
+## 2) Tech choices (why)
+
+* **Yjs** over rolling OT: fewer sharp edges; battle-tested for collaborative text.
+* **y-websocket**: trivial to add; handles sync & awareness messages.
+* **Monaco via `@monaco-editor/react`**: excellent editor features, quick setup.
+* **Express + ws**: keeps to your stack; one process, minimal deps.
+* **Neon (Postgres)**: simple schema, HTTP-friendly driver available; store full doc text for MVP (not per-update logs).
+
+> You could use CodeMirror 6 instead of Monaco if bundle size matters. For “fastest ship,” Monaco usually wins for code editors.
+
+---
+
+## 3) Data model (Neon)
+
+**documents**
+
+* `id` (text, primary key) – room/document id
+* `title` (text, nullable)
+* `content` (text) – full plain text snapshot
+* `updated_at` (timestamptz default now())
+
+SQL:
+
+```sql
+CREATE TABLE IF NOT EXISTS documents (
+  id TEXT PRIMARY KEY,
+  title TEXT,
+  content TEXT NOT NULL DEFAULT '',
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+```
+
+> MVP stores the **whole document** on save. It’s simple and good enough for < \~1–2 MB code files. You can later migrate to storing Yjs updates or chunked history.
+
+---
+
+## 4) Backend: Express + WebSocket + Yjs
+
+**Key responsibilities**
+
+* Host a y-websocket endpoint: `/collab`
+* Keep an in-memory `Y.Doc` per `docId` (room)
+* On first client connect per room:
+
+  * Load `content` from Neon
+  * Apply it into the `Y.Doc` (set Y.Text value)
+* Listen to Yjs updates and **debounce** a save to Neon (e.g., 2–5s)
+* Simple REST:
+
+  * `GET /api/docs/:id` → fetch current content (for debugging/Postman)
+  * `PUT /api/docs/:id` → (optional) manual save
+
+**NPM**
+
+```
+npm i express ws y-websocket yjs pg
+# or use Neon HTTP driver:
+npm i @neondatabase/serverless
+npm i -D tsx nodemon typescript @types/express @types/ws
+```
+
+**server.ts (sketch)**
+
+```ts
+import express from 'express';
+import { WebSocketServer } from 'ws';
+import { setupWSConnection } from 'y-websocket/bin/utils.js';
+import { Pool } from 'pg'; // or use '@neondatabase/serverless' for edge/serverless envs
+import * as Y from 'yjs';
+import http from 'http';
+
+const app = express();
+app.use(express.json());
+
+const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+
+type Room = {
+  doc: Y.Doc;
+  ytext: Y.Text;
+  saveTimer?: NodeJS.Timeout;
+};
+const rooms = new Map<string, Room>();
+
+async function loadRoom(docId: string): Promise<Room> {
+  if (rooms.has(docId)) return rooms.get(docId)!;
+
+  const r: Room = { doc: new Y.Doc(), ytext: new Y.Text() };
+  r.doc.getText('content'); // ensure key exists
+  r.doc.getText('content').insert(0, ''); // no-op init
+
+  // attach ytext
+  r.ytext = r.doc.getText('content');
+
+  // hydrate from DB
+  const { rows } = await pool.query('SELECT content FROM documents WHERE id = $1', [docId]);
+  if (rows.length) {
+    const content = rows[0].content as string;
+    r.ytext.delete(0, r.ytext.length);
+    r.ytext.insert(0, content);
+  } else {
+    await pool.query(
+      'INSERT INTO documents (id, content) VALUES ($1, $2) ON CONFLICT (id) DO NOTHING',
+      [docId, '']
+    );
+  }
+
+  // debounce save on any document change
+  const saveDebounced = () => {
+    clearTimeout(r.saveTimer as any);
+    r.saveTimer = setTimeout(async () => {
+      const content = r.ytext.toString();
+      await pool.query(
+        'UPDATE documents SET content = $2, updated_at = NOW() WHERE id = $1',
+        [docId, content]
+      );
+    }, 2000);
+  };
+  r.doc.on('update', saveDebounced);
+
+  rooms.set(docId, r);
+  return r;
+}
+
+// REST (debug)
+app.get('/api/docs/:id', async (req, res) => {
+  const { id } = req.params;
+  const { rows } = await pool.query('SELECT * FROM documents WHERE id = $1', [id]);
+  res.json(rows[0] || null);
+});
+
+// WebSocket: y-websocket on /collab
+const server = http.createServer(app);
+const wss = new WebSocketServer({ noServer: true });
+
+server.on('upgrade', async (request, socket, head) => {
+  const url = new URL(request.url!, `http://${request.headers.host}`);
+  if (url.pathname === '/collab') {
+    const docId = url.searchParams.get('room') || 'default';
+    const room = await loadRoom(docId);
+    wss.handleUpgrade(request, socket, head, (ws) => {
+      setupWSConnection(ws, request, { docName: docId, gc: true, docs: new Map([[docId, room.doc]]) });
+    });
+  } else {
+    socket.destroy();
+  }
+});
+
+const PORT = process.env.PORT || 3001;
+server.listen(PORT, () => console.log(`Server on :${PORT}`));
+```
+
+> `setupWSConnection` understands the y-websocket protocol (clients will connect with `ws://host/collab?room=<docId>`).
+
+---
+
+## 5) Frontend: React + Monaco + Yjs + Tailwind
+
+**NPM**
+
+```
+npm i react react-dom @monaco-editor/react yjs y-websocket
+npm i -D typescript vite
+```
+
+**Key pieces**
+
+* Create a `Y.Doc`, a `WebsocketProvider` (from `y-websocket`) pointing to `/collab?room=:id`, and bind a `Y.Text` to Monaco using a small adapter.
+* Use Yjs **awareness** for presence: assign `user.name` & `user.color`.
+* Render remote cursors/selections via Monaco **decorations**.
+
+**EditorProvider.tsx (sketch)**
+
+```tsx
+import React, { useEffect, useMemo, useRef } from 'react';
+import Editor from '@monaco-editor/react';
+import * as Y from 'yjs';
+import { WebsocketProvider } from 'y-websocket';
+
+type Props = { docId: string; username: string; };
+
+export default function CollabEditor({ docId, username }: Props) {
+  const ydocRef = useRef<Y.Doc>();
+  const providerRef = useRef<WebsocketProvider>();
+  const ytextRef = useRef<Y.Text>();
+
+  useEffect(() => {
+    const ydoc = new Y.Doc();
+    const provider = new WebsocketProvider(
+      `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/collab`,
+      docId,
+      ydoc
+    );
+    const ytext = ydoc.getText('content');
+
+    // presence (awareness)
+    const color = '#' + (Math.random() * 0xffffff | 0).toString(16).padStart(6, '0');
+    provider.awareness.setLocalState({ user: { name: username, color } });
+
+    ydocRef.current = ydoc;
+    providerRef.current = provider;
+    ytextRef.current = ytext;
+
+    return () => {
+      provider.destroy();
+      ydoc.destroy();
+    };
+  }, [docId, username]);
+
+  return (
+    <Editor
+      height="90vh"
+      theme="vs-dark"
+      defaultLanguage="javascript"
+      onMount={(editor, monaco) => {
+        // Bind Monaco <-> Y.Text
+        // Simple binding: set initial and observe changes both ways
+        const ytext = ytextRef.current!;
+        editor.setValue(ytext.toString());
+
+        const applyYToMonaco = (event: any) => {
+          const newValue = ytext.toString();
+          const model = editor.getModel();
+          if (model && newValue !== model.getValue()) {
+            model.pushEditOperations([], [{ range: model.getFullModelRange(), text: newValue }], () => null);
+          }
+        };
+        ytext.observe(applyYToMonaco);
+
+        const disposers: any[] = [];
+        disposers.push(
+          editor.onDidChangeModelContent(() => {
+            const value = editor.getValue();
+            if (value !== ytext.toString()) {
+              ytext.delete(0, ytext.length);
+              ytext.insert(0, value);
+            }
+          })
+        );
+
+        // Basic remote cursor rendering (awareness); for MVP this can be skipped or done later.
+
+        // Cleanup
+        editor.onDidDispose(() => {
+          ytext.unobserve(applyYToMonaco);
+          disposers.forEach((d) => d.dispose?.());
+        });
+      }}
+      options={{ minimap: { enabled: false }, automaticLayout: true }}
+    />
+  );
+}
+```
+
+> For production, prefer a proper binding (e.g., `y-monaco` community adapter) to avoid “replace whole text” updates. For a quick MVP, the above is acceptable for small files.
+
+**UI bits**
+
+* Top bar with room id, “copy link”, “last saved at …”
+* Random username generator (e.g., “calm-otter-4”) stored in localStorage
+
+---
+
+## 6) Presence (cursors & selections)
+
+* Use `provider.awareness.on('change', ...)` to get peers and their states.
+* For each remote peer, map their **cursor position** and **selection range** into Monaco **decorations** (e.g., `model.deltaDecorations`).
+* Store ephemeral fields in awareness:
+
+  ```ts
+  provider.awareness.setLocalStateField('cursor', {
+    position: { lineNumber, column },
+    selection: { start, end }
+  });
+  ```
+* Update on `editor.onDidChangeCursorPosition` / `onDidChangeCursorSelection`.
+
+> Start with showing a small name label near the caret (use Monaco decorations with `afterContentClassName`). You can refine visuals later.
+
+---
+
+## 7) Reconnects & autosave
+
+* **Reconnect:** y-websocket auto-retries; Yjs merges on reconnection.
+* **Autosave:** server debounces writes (2–5s after last update).
+* **On server restart:** first client to join triggers DB hydrate.
+* Optional: server cron to periodically flush all rooms (if traffic continues).
+
+---
+
+## 8) Local dev & scripts
+
+* **Monorepo or two folders**: `/client` (Vite) and `/server` (Express).
+* TypeScript runners: use **tsx** for fast TS execution.
+* Scripts:
+
+  ```json
+  // server/package.json
+  {
+    "scripts": {
+      "dev": "tsx watch src/server.ts",
+      "start": "node dist/server.js",
+      "build": "tsc"
+    }
+  }
+  // client/package.json
+  {
+    "scripts": {
+      "dev": "vite",
+      "build": "vite build",
+      "preview": "vite preview"
+    }
+  }
+  ```
+* Env:
+
+  ```
+  DATABASE_URL=postgres://...neon.tech/neondb?sslmode=require
+  PORT=3001
+  ```
+
+---
+
+## 9) Testing (fast)
+
+* **REST** with Postman: `GET /api/docs/:id`
+* **WebSocket**: `wscat -c ws://localhost:3001/collab?room=test1` (basic sanity), but best is to open two browser tabs on `/doc/test1` and type.
+
+---
+
+## 10) Deployment
+
+* **Backend**: single Node process (Express + ws). Render/Fly/Heroku all fine.
+* **Frontend**: Vite static build → same host (serve via Express `app.use(express.static('dist'))`) or separate (Netlify/Vercel) pointing to backend URL.
+* **Neon**: use pooled connection string when available. Keep a single `Pool` instance in the server.
+
+---
+
+## 11) Stretch goals (if time remains)
+
+* Syntax selection per file type (Monaco language switcher).
+* Simple document list page (read titles from DB).
+* “Fork document” endpoint.
+* Light auth (magic link or room password).
+* Snapshot/versions table.
+
+---
+
+## 12) Minimal timeline (3–4 hours)
+
+1. **0:00–0:30** — Create Neon table, scaffold server with Express + ws + yjs; health check.
+2. **0:30–1:30** — Implement y-websocket upgrade route + room hydration + autosave debounce.
+3. **1:30–2:30** — Frontend (Vite, Monaco, connect WebSocket, Y.Text binding), basic UI.
+4. **2:30–3:00** — Presence cursors (awareness → Monaco decorations) + last-saved indicator.
+5. **3:00–4:00** — Polish, test two tabs, deploy.
+
+---
+
+## 13) Optional alternative (even faster): managed realtime
+
+If you’re willing to add a managed service (and skip some plumbing):
+
+* **Liveblocks** or **Supabase Realtime** for presence + text sync + storage
+* Keep Monaco on the frontend; your backend can be reduced to simple CRUD
+* This is often the fastest route for hackathons, but it adds a vendor.
+
+---
+
+### Quick checklists
+
+**Backend**
+
+* [ ] Express server + upgrade handler for `/collab?room=:id`
+* [ ] `loadRoom()` hydrates Y.Doc from Neon
+* [ ] Debounced save on `doc.on('update')`
+* [ ] `/api/docs/:id` GET for sanity
+* [ ] Single `Pool` to Neon
+
+**Frontend**
+
+* [ ] `Y.Doc` + `WebsocketProvider` per room
+* [ ] Monaco bound to `Y.Text('content')`
+* [ ] Awareness state (name/color, cursor/selection)
+* [ ] Remote cursor decorations
+* [ ] “Last saved” indicator
+
+If you want, I can generate starter files for both server and client folders next.
