@@ -1,8 +1,9 @@
-
 import express from 'express';
 import { WebSocketServer } from 'ws';
-import { setupWSConnection } from 'y-websocket/bin/utils.js';
-import { neon } from '@neondatabase/serverless';
+import * as encoding from 'lib0/encoding';
+import * as decoding from 'lib0/decoding';
+import * as syncProtocol from 'y-protocols/sync';
+import * as awarenessProtocol from 'y-protocols/awareness';
 import * as Y from 'yjs';
 import http from 'http';
 import cors from 'cors';
@@ -45,13 +46,13 @@ async function getDocument(docId: string): Promise<Y.Doc> {
 
   const ydoc = new Y.Doc();
   const ytext = ydoc.getText('content');
-  
+
   try {
     // Load document from database
     const result = await sql`
       SELECT content FROM documents WHERE id = ${docId}
     `;
-    
+
     if (result.length > 0 && result[0].content) {
       ytext.insert(0, result[0].content);
     }
@@ -94,7 +95,7 @@ app.get('/api/docs/:id/status', async (req, res) => {
     const result = await sql`
       SELECT updated_at FROM documents WHERE id = ${req.params.id}
     `;
-    
+
     res.json({
       lastSaved: result.length > 0 ? result[0].updated_at : null
     });
@@ -113,27 +114,70 @@ app.get('*', (req, res) => {
 const server = http.createServer(app);
 
 // WebSocket server for collaboration
-const wss = new WebSocketServer({ 
+const wss = new WebSocketServer({
   server,
   path: '/collab'
 });
 
+// Custom WebSocket connection handler
+function setupWSConnection(ws: any, req: any, { docName, doc }: { docName: string, doc: Y.Doc }) {
+  const client = { ws, doc };
+  const awareness = new awarenessProtocol.Awareness(doc)
+  
+  ws.on('message', (message: Uint8Array) => {
+    const update = decoding.decodeSync(message);
+    if (Y.isUpdate(update)) {
+      Y.applyUpdate(doc, update);
+    } else if (awarenessProtocol.isAwarenessUpdate(update)) {
+      awarenessProtocol.applyAwarenessUpdate(awareness, update, ws)
+    }
+  });
+
+  // Send initial document state
+  const syncResponse = encoding.encode(syncProtocol.encodeStateAsUpdate(doc));
+  ws.send(syncResponse);
+
+  // Send awareness information
+  awareness.setLocalState(null) // Set initial state to null
+  const awarenessUpdate = encoding.encode(awarenessProtocol.encodeAwarenessUpdate(awareness, Array.from(awareness.getNodes())));
+  ws.send(awarenessUpdate);
+
+  // Handle awareness changes
+  awareness.on('update', (updatedAwareness: Uint8Array, origin: any) => {
+    if (origin !== client) {
+      ws.send(encoding.encode(updatedAwareness));
+    }
+  });
+
+  ws.on('close', () => {
+    console.log(`Client disconnected from room: ${docName}`);
+    awareness.destroy();
+    // Potentially remove the doc from memory if no clients are connected
+  });
+
+  ws.on('error', (error: Error) => {
+    console.error(`WebSocket error in room ${docName}:`, error);
+    awareness.destroy();
+  });
+}
+
+
 wss.on('connection', (ws, req) => {
   const url = new URL(req.url!, `http://${req.headers.host}`);
   const docId = url.searchParams.get('room');
-  
+
   if (!docId) {
     ws.close(1008, 'Missing room parameter');
     return;
   }
 
   console.log(`Client connected to room: ${docId}`);
-  
+
   // Get or create document
   getDocument(docId).then(ydoc => {
-    setupWSConnection(ws, req, { 
+    setupWSConnection(ws, req, {
       docName: docId,
-      doc: ydoc 
+      doc: ydoc
     });
   }).catch(error => {
     console.error('Error setting up WebSocket connection:', error);
