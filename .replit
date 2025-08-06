@@ -1,7 +1,29 @@
+
 modules = ["bash", "nodejs-24", "docker"]
 run = "npm run dev"
+
 [nix]
 channel = "stable-25_05"
 
 [deployment]
-run = ["sh", "-c", "npm run dev"]
+run = ["sh", "-c", "npm run build && npm start"]
+build = ["sh", "-c", "npm run build"]
+
+[env]
+PORT = "5000"
+
+[workflows]
+runButton = "Development"
+
+[[workflows.workflow]]
+name = "Development"
+author = 3345687
+mode = "parallel"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "cd server && npm run dev"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "cd client && npm run dev"
