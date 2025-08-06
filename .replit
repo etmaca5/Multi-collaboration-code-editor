@@ -1,0 +1,7 @@
+modules = ["bash", "nodejs-24", "docker"]
+run = "npm run dev"
+[nix]
+channel = "stable-25_05"
+
+[deployment]
+run = ["sh", "-c", "npm run dev"]
