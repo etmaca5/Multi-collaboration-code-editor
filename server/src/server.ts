@@ -17,15 +17,7 @@ app.use(express.static(path.join(__dirname, '../../client/dist')));
 
 const sql = neon(process.env.DATABASE_URL || '');
 
-type Room = {
-  doc: Y.Doc;
-  ytext: Y.Text;
-  saveTimer?: NodeJS.Timeout;
-  lastSaved?: Date;
-};
-
-const rooms = new Map<string, Room>();
-
+// Initialize database
 async function initDatabase() {
   try {
     await sql`
@@ -38,172 +30,122 @@ async function initDatabase() {
     `;
     console.log('Database initialized');
   } catch (error) {
-    console.error('Database initialization failed:', error);
+    console.error('Database initialization error:', error);
   }
 }
 
-async function loadRoom(docId: string): Promise<Room> {
-  if (rooms.has(docId)) {
-    return rooms.get(docId)!;
+// Document storage
+const docs = new Map<string, Y.Doc>();
+
+// Get or create document
+async function getDocument(docId: string): Promise<Y.Doc> {
+  if (docs.has(docId)) {
+    return docs.get(docId)!;
   }
 
-  console.log(`Loading room: ${docId}`);
+  const ydoc = new Y.Doc();
+  const ytext = ydoc.getText('content');
   
-  const doc = new Y.Doc();
-  const ytext = doc.getText('content');
-  
-  const room: Room = {
-    doc,
-    ytext,
-    lastSaved: new Date()
-  };
-
   try {
-    // Hydrate from database
+    // Load document from database
     const result = await sql`
       SELECT content FROM documents WHERE id = ${docId}
     `;
     
-    if (result.length > 0) {
-      const content = result[0].content as string;
-      if (content) {
-        ytext.insert(0, content);
-      }
-      console.log(`Loaded existing document ${docId} with ${content.length} characters`);
-    } else {
-      // Create new document
-      await sql`
-        INSERT INTO documents (id, content) 
-        VALUES (${docId}, '') 
-        ON CONFLICT (id) DO NOTHING
-      `;
-      console.log(`Created new document: ${docId}`);
+    if (result.length > 0 && result[0].content) {
+      ytext.insert(0, result[0].content);
     }
   } catch (error) {
-    console.error(`Error loading room ${docId}:`, error);
+    console.error('Error loading document:', error);
   }
 
-  // Set up debounced save
-  const saveDebounced = () => {
-    if (room.saveTimer) {
-      clearTimeout(room.saveTimer);
-    }
-    
-    room.saveTimer = setTimeout(async () => {
+  // Auto-save changes with debouncing
+  let saveTimeout: NodeJS.Timeout;
+  ydoc.on('update', () => {
+    clearTimeout(saveTimeout);
+    saveTimeout = setTimeout(async () => {
       try {
         const content = ytext.toString();
         await sql`
-          UPDATE documents 
-          SET content = ${content}, updated_at = NOW() 
-          WHERE id = ${docId}
+          INSERT INTO documents (id, content, updated_at)
+          VALUES (${docId}, ${content}, NOW())
+          ON CONFLICT (id) DO UPDATE SET
+            content = EXCLUDED.content,
+            updated_at = EXCLUDED.updated_at
         `;
-        room.lastSaved = new Date();
-        console.log(`Saved document ${docId} (${content.length} characters)`);
+        console.log(`Document ${docId} saved`);
       } catch (error) {
-        console.error(`Error saving document ${docId}:`, error);
+        console.error('Error saving document:', error);
       }
-    }, 2000);
-  };
+    }, 1000);
+  });
 
-  doc.on('update', saveDebounced);
-
-  rooms.set(docId, room);
-  return room;
+  docs.set(docId, ydoc);
+  return ydoc;
 }
 
-// REST API endpoints
-app.get('/api/docs/:id', async (req, res) => {
+// API Routes
+app.get('/api/health', (req, res) => {
+  res.json({ status: 'ok', timestamp: new Date().toISOString() });
+});
+
+app.get('/api/docs/:id/status', async (req, res) => {
   try {
-    const { id } = req.params;
     const result = await sql`
-      SELECT * FROM documents WHERE id = ${id}
+      SELECT updated_at FROM documents WHERE id = ${req.params.id}
     `;
     
-    if (result.length > 0) {
-      const room = rooms.get(id);
-      res.json({
-        ...result[0],
-        lastSaved: room?.lastSaved,
-        isLoaded: rooms.has(id)
-      });
-    } else {
-      res.status(404).json({ error: 'Document not found' });
-    }
+    res.json({
+      lastSaved: result.length > 0 ? result[0].updated_at : null
+    });
   } catch (error) {
-    console.error('Error fetching document:', error);
+    console.error('Error fetching document status:', error);
     res.status(500).json({ error: 'Internal server error' });
   }
 });
 
-app.get('/api/docs/:id/status', async (req, res) => {
-  const { id } = req.params;
-  const room = rooms.get(id);
-  
-  res.json({
-    exists: rooms.has(id),
-    lastSaved: room?.lastSaved,
-    contentLength: room?.ytext.length || 0
-  });
-});
-
-app.get('/api/health', (req, res) => {
-  res.json({ 
-    status: 'ok', 
-    rooms: rooms.size,
-    uptime: process.uptime()
-  });
-});
-
-// Serve React app for all other routes
+// Catch-all handler for SPA routing
 app.get('*', (req, res) => {
   res.sendFile(path.join(__dirname, '../../client/dist/index.html'));
 });
 
-// WebSocket setup
+// Create HTTP server
 const server = http.createServer(app);
-const wss = new WebSocketServer({ noServer: true });
 
-server.on('upgrade', async (request, socket, head) => {
-  const url = new URL(request.url!, `http://${request.headers.host}`);
-  
-  if (url.pathname === '/collab') {
-    const docId = url.searchParams.get('room') || 'default';
-    
-    try {
-      const room = await loadRoom(docId);
-      
-      wss.handleUpgrade(request, socket, head, (ws) => {
-        console.log(`WebSocket connection established for room: ${docId}`);
-        setupWSConnection(ws, request, { 
-          docName: docId, 
-          gc: true,
-          docs: new Map([[docId, room.doc]])
-        });
-      });
-    } catch (error) {
-      console.error('WebSocket upgrade error:', error);
-      socket.destroy();
-    }
-  } else {
-    socket.destroy();
-  }
+// WebSocket server for collaboration
+const wss = new WebSocketServer({ 
+  server,
+  path: '/collab'
 });
 
-// Initialize and start server
-const PORT = process.env.PORT || 5000;
+wss.on('connection', (ws, req) => {
+  const url = new URL(req.url!, `http://${req.headers.host}`);
+  const docId = url.searchParams.get('room');
+  
+  if (!docId) {
+    ws.close(1008, 'Missing room parameter');
+    return;
+  }
 
-initDatabase().then(() => {
-  server.listen(PORT, '0.0.0.0', () => {
-    console.log(`Server running on port ${PORT}`);
-    console.log(`WebSocket endpoint: ws://localhost:${PORT}/collab`);
+  console.log(`Client connected to room: ${docId}`);
+  
+  // Get or create document
+  getDocument(docId).then(ydoc => {
+    setupWSConnection(ws, req, { 
+      docName: docId,
+      doc: ydoc 
+    });
+  }).catch(error => {
+    console.error('Error setting up WebSocket connection:', error);
+    ws.close(1011, 'Internal server error');
   });
 });
 
-// Graceful shutdown
-process.on('SIGTERM', () => {
-  console.log('SIGTERM received, shutting down gracefully');
-  server.close(() => {
-    console.log('Server closed');
-    process.exit(0);
+const PORT = process.env.PORT || 5000;
+
+// Initialize database and start server
+initDatabase().then(() => {
+  server.listen(PORT, '0.0.0.0', () => {
+    console.log(`Server running on port ${PORT}`);
   });
 });
