@@ -1,4 +1,3 @@
-
 {
   "name": "collaborative-code-editor",
   "version": "1.0.0",
@@ -13,10 +12,17 @@
     "build:server": "cd server && npm run build",
     "start": "cd server && npm start"
   },
-  "keywords": ["collaborative", "editor", "websocket", "yjs", "monaco"],
+  "keywords": [
+    "collaborative",
+    "editor",
+    "websocket",
+    "yjs",
+    "monaco"
+  ],
   "author": "",
   "license": "MIT",
   "devDependencies": {
+    "@vitejs/plugin-react": "^4.7.0",
     "concurrently": "^8.2.2"
   }
 }
