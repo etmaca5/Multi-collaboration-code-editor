@@ -1,11 +1,15 @@
+import { config } from 'dotenv';
+import path from 'path';
+
+// Load environment variables from the root directory
+config({ path: path.join(__dirname, '../../.env') });
 import express from 'express';
 import { WebSocketServer } from 'ws';
-import { neon } from '@neondatabase/serverless';
+import { Pool } from 'pg';
 import * as Y from 'yjs';
 import { Awareness } from 'y-protocols/awareness';
 import http from 'http';
 import cors from 'cors';
-import path from 'path';
 
 const app = express();
 app.use(express.json());
@@ -16,24 +20,30 @@ if (process.env.NODE_ENV === 'production') {
   app.use(express.static(path.join(__dirname, '../../client/dist')));
 }
 
-const sql = process.env.DATABASE_URL ? neon(process.env.DATABASE_URL) : null;
+// Create connection pool
+const pool = process.env.DATABASE_URL ? new Pool({
+  connectionString: process.env.DATABASE_URL,
+  max: 20, // Maximum number of connections in the pool
+  idleTimeoutMillis: 30000, // Close idle connections after 30 seconds
+  connectionTimeoutMillis: 2000, // Return an error after 2 seconds if connection could not be established
+}) : null;
 
 // Initialize database
 async function initDatabase() {
-  if (!sql) {
+  if (!pool) {
     console.log('No database connection - running in demo mode');
     return;
   }
   
   try {
-    await sql`
+    await pool.query(`
       CREATE TABLE IF NOT EXISTS documents (
         id TEXT PRIMARY KEY,
         title TEXT,
         content TEXT NOT NULL DEFAULT '',
         updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
       )
-    `;
+    `);
     console.log('Database initialized');
   } catch (error) {
     console.error('Database initialization error:', error);
@@ -52,15 +62,16 @@ async function getDocument(docId: string): Promise<Y.Doc> {
   const ydoc = new Y.Doc();
   const ytext = ydoc.getText('content');
 
-    if (sql) {
+    if (pool) {
     try {
       // Load document from database
-      const result = await sql`
-        SELECT content FROM documents WHERE id = ${docId}
-      `;
+      const result = await pool.query(
+        'SELECT content FROM documents WHERE id = $1',
+        [docId]
+      );
       
-      if (result.length > 0 && result[0].content) {
-        ytext.insert(0, result[0].content);
+      if (result.rows.length > 0 && result.rows[0].content) {
+        ytext.insert(0, result.rows[0].content);
       }
     } catch (error) {
       console.error('Error loading document:', error);
@@ -72,16 +83,17 @@ async function getDocument(docId: string): Promise<Y.Doc> {
   ydoc.on('update', () => {
     clearTimeout(saveTimeout);
     saveTimeout = setTimeout(async () => {
-      if (sql) {
+      if (pool) {
         try {
           const content = ytext.toString();
-          await sql`
-            INSERT INTO documents (id, content, updated_at)
-            VALUES (${docId}, ${content}, NOW())
-            ON CONFLICT (id) DO UPDATE SET
-              content = EXCLUDED.content,
-              updated_at = EXCLUDED.updated_at
-          `;
+          await pool.query(
+            `INSERT INTO documents (id, content, updated_at)
+             VALUES ($1, $2, NOW())
+             ON CONFLICT (id) DO UPDATE SET
+               content = EXCLUDED.content,
+               updated_at = EXCLUDED.updated_at`,
+            [docId, content]
+          );
           console.log(`Document ${docId} saved`);
         } catch (error) {
           console.error('Error saving document:', error);
@@ -102,17 +114,18 @@ app.get('/api/health', (req, res) => {
 app.get('/api/docs/:id/status', async (req, res) => {
   const { id } = req.params;
   
-  if (!sql) {
+  if (!pool) {
     return res.json({ lastSaved: null });
   }
   
   try {
-    const result = await sql`
-      SELECT updated_at FROM documents WHERE id = ${id}
-    `;
+    const result = await pool.query(
+      'SELECT updated_at FROM documents WHERE id = $1',
+      [id]
+    );
     
     res.json({
-      lastSaved: result.length > 0 ? result[0].updated_at : null
+      lastSaved: result.rows.length > 0 ? result.rows[0].updated_at : null
     });
   } catch (error) {
     console.error('Error fetching document status:', error);
@@ -140,6 +153,7 @@ const wss = new WebSocketServer({
 function setupWSConnection(ws: any, req: any, { docName, doc }: { docName: string, doc: Y.Doc }) {
   const awareness = new Awareness(doc);
   
+  // Set up message handling
   ws.on('message', (message: Uint8Array) => {
     try {
       // Handle Yjs updates
@@ -150,47 +164,86 @@ function setupWSConnection(ws: any, req: any, { docName, doc }: { docName: strin
   });
 
   // Send initial document state
-  const state = Y.encodeStateAsUpdate(doc);
-  ws.send(state);
+  try {
+    const state = Y.encodeStateAsUpdate(doc);
+    ws.send(state);
+  } catch (error) {
+    console.error('Error sending initial state:', error);
+  }
 
-  // Handle awareness changes
+  // Handle awareness changes - only send if connection is still open
   awareness.on('update', (update: Uint8Array) => {
-    ws.send(update);
+    if (ws.readyState === ws.OPEN) {
+      try {
+        ws.send(update);
+      } catch (error) {
+        console.error('Error sending awareness update:', error);
+      }
+    }
   });
 
   ws.on('close', () => {
     console.log(`Client disconnected from room: ${docName}`);
-    awareness.destroy();
+    try {
+      awareness.destroy();
+    } catch (error) {
+      console.error('Error destroying awareness:', error);
+    }
   });
 
   ws.on('error', (error: Error) => {
     console.error(`WebSocket error in room ${docName}:`, error);
-    awareness.destroy();
+    try {
+      awareness.destroy();
+    } catch (destroyError) {
+      console.error('Error destroying awareness on error:', destroyError);
+    }
   });
 }
 
 
 wss.on('connection', (ws, req) => {
-  const url = new URL(req.url!, `http://${req.headers.host}`);
-  const docId = url.searchParams.get('room') || url.searchParams.get('d');
+  try {
+    console.log('WebSocket connection attempt:', req.url);
+    const url = new URL(req.url!, `http://${req.headers.host}`);
+    let docId = url.searchParams.get('room') || url.searchParams.get('d');
 
-  if (!docId) {
-    ws.close(1008, 'Missing room parameter');
-    return;
-  }
+    // If no query parameter, try to extract from path
+    if (!docId) {
+      const pathParts = url.pathname.split('/');
+      const lastPart = pathParts[pathParts.length - 1];
+      if (lastPart && lastPart !== 'collab') {
+        docId = lastPart;
+      }
+    }
 
-  console.log(`Client connected to room: ${docId}`);
+    if (!docId) {
+      console.log('WebSocket connection attempt without room parameter:', req.url);
+      ws.close(1008, 'Missing room parameter');
+      return;
+    }
 
-  // Get or create document
-  getDocument(docId).then(ydoc => {
-    setupWSConnection(ws, req, {
-      docName: docId,
-      doc: ydoc
+    console.log(`Client connected to room: ${docId}`);
+
+    // Get or create document
+    getDocument(docId).then(ydoc => {
+      try {
+        setupWSConnection(ws, req, {
+          docName: docId,
+          doc: ydoc
+        });
+      } catch (error) {
+        console.error('Error in setupWSConnection:', error);
+        ws.close(1011, 'Internal server error');
+      }
+    }).catch(error => {
+      console.error('Error getting document:', error);
+      ws.close(1011, 'Internal server error');
     });
-  }).catch(error => {
-    console.error('Error setting up WebSocket connection:', error);
+  } catch (error) {
+    console.error('Error in WebSocket connection handler:', error);
     ws.close(1011, 'Internal server error');
-  });
+  }
 });
 
 const PORT = process.env.PORT || 5001;
@@ -200,4 +253,13 @@ initDatabase().then(() => {
   server.listen(Number(PORT), '0.0.0.0', () => {
     console.log(`Server running on port ${PORT}`);
   });
+});
+
+// Graceful shutdown
+process.on('SIGINT', async () => {
+  console.log('Shutting down gracefully...');
+  if (pool) {
+    await pool.end();
+  }
+  process.exit(0);
 });

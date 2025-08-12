@@ -24,7 +24,7 @@ function DocumentEditor() {
     }
 
     // Check document status
-    fetch(`/api/docs/${id}/status`)
+    fetch(`http://localhost:5001/api/docs/${id}/status`)
       .then(res => res.json())
       .then(data => {
         setStatus({

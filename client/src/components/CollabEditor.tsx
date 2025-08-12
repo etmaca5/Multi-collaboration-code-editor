@@ -34,7 +34,8 @@ function CollabEditor({ docId, username }: Props) {
   useEffect(() => {
     const ydoc = new Y.Doc()
     const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-    const wsUrl = `${wsProtocol}//${window.location.host}/collab`
+    // Connect to the backend server on port 5001
+    const wsUrl = `${wsProtocol}//localhost:5001/collab`
     
     const provider = new WebsocketProvider(wsUrl, docId, ydoc)
     const ytext = ydoc.getText('content')
