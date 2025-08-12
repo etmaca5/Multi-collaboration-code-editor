@@ -60,17 +60,27 @@ async function getDocument(docId: string): Promise<Y.Doc> {
   }
 
   const ydoc = new Y.Doc();
+  
+  // Initialize the document structure properly
   const ytext = ydoc.getText('content');
+  
+  // Force a transaction to ensure the document structure is created
+  ydoc.transact(() => {
+    // This ensures the document has the proper Yjs structure
+    ytext.insert(0, '');
+  });
 
-    if (pool) {
+  // Load document from database
+  if (pool) {
     try {
-      // Load document from database
       const result = await pool.query(
         'SELECT content FROM documents WHERE id = $1',
         [docId]
       );
       
       if (result.rows.length > 0 && result.rows[0].content) {
+        // Clear the initial empty content and insert the actual content
+        ytext.delete(0, ytext.length);
         ytext.insert(0, result.rows[0].content);
       }
     } catch (error) {
@@ -102,6 +112,7 @@ async function getDocument(docId: string): Promise<Y.Doc> {
     }, 1000);
   });
 
+  // Store the document in memory
   docs.set(docId, ydoc);
   return ydoc;
 }
@@ -143,27 +154,30 @@ if (process.env.NODE_ENV === 'production') {
 // Create HTTP server
 const server = http.createServer(app);
 
-// WebSocket server for collaboration
+// WebSocket server for collaboration - handle all paths
 const wss = new WebSocketServer({
-  server,
-  path: '/collab'
+  server
 });
 
-// Custom WebSocket connection handler
+// Simple WebSocket connection handler
 function setupWSConnection(ws: any, req: any, { docName, doc }: { docName: string, doc: Y.Doc }) {
+  // Ensure the document has the required Yjs structure
+  const ytext = doc.getText('content');
+  
   const awareness = new Awareness(doc);
   
-  // Set up message handling
+  // Simple message handling - just apply updates
   ws.on('message', (message: Uint8Array) => {
-    try {
-      // Handle Yjs updates
-      Y.applyUpdate(doc, message);
-    } catch (error) {
-      console.error('Error applying update:', error);
+    if (ws.readyState === ws.OPEN && message && message.length > 0) {
+      try {
+        Y.applyUpdate(doc, message);
+      } catch (error) {
+        console.error('Error applying update:', error);
+      }
     }
   });
 
-  // Send initial document state
+  // Send initial state
   try {
     const state = Y.encodeStateAsUpdate(doc);
     ws.send(state);
@@ -171,9 +185,9 @@ function setupWSConnection(ws: any, req: any, { docName, doc }: { docName: strin
     console.error('Error sending initial state:', error);
   }
 
-  // Handle awareness changes - only send if connection is still open
+  // Handle awareness updates
   awareness.on('update', (update: Uint8Array) => {
-    if (ws.readyState === ws.OPEN) {
+    if (ws.readyState === ws.OPEN && update && update.length > 0) {
       try {
         ws.send(update);
       } catch (error) {
@@ -184,20 +198,12 @@ function setupWSConnection(ws: any, req: any, { docName, doc }: { docName: strin
 
   ws.on('close', () => {
     console.log(`Client disconnected from room: ${docName}`);
-    try {
-      awareness.destroy();
-    } catch (error) {
-      console.error('Error destroying awareness:', error);
-    }
+    awareness.destroy();
   });
 
   ws.on('error', (error: Error) => {
     console.error(`WebSocket error in room ${docName}:`, error);
-    try {
-      awareness.destroy();
-    } catch (destroyError) {
-      console.error('Error destroying awareness on error:', destroyError);
-    }
+    awareness.destroy();
   });
 }
 
@@ -206,6 +212,14 @@ wss.on('connection', (ws, req) => {
   try {
     console.log('WebSocket connection attempt:', req.url);
     const url = new URL(req.url!, `http://${req.headers.host}`);
+    
+    // Only handle /collab paths
+    if (!url.pathname.startsWith('/collab')) {
+      console.log('WebSocket connection to non-collab path:', req.url);
+      ws.close(1008, 'Invalid path');
+      return;
+    }
+    
     let docId = url.searchParams.get('room') || url.searchParams.get('d');
 
     // If no query parameter, try to extract from path

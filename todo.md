@@ -1,42 +1,37 @@
 
 # TODO List
 
-## Backend
-- [x] Set up Express server with WebSocket upgrade handler
-- [x] Implement room management with Y.Doc instances
-- [x] Add Neon database integration
-- [x] Implement debounced autosave
-- [x] Add REST endpoints for debugging
-- [x] Add document status endpoint (/api/docs/:id/status)
+## Core Functionality
+- [x] **Backend Setup** - Express server with WebSocket, Yjs integration, Neon database
+- [x] **Frontend Setup** - React + Monaco Editor + Yjs client integration
+- [x] **Real-time Collaboration** - WebSocket connections, document synchronization
+- [x] **Database Integration** - Connection pooling, autosave, document persistence
+- [x] **Environment Configuration** - Database connection, environment variables
 
-## Frontend
-- [x] Set up React + Vite project structure
-- [x] Integrate Monaco Editor
-- [x] Implement Y.Doc + WebSocketProvider
-- [x] Add Monaco <-> Y.Text binding
-- [x] Create document routing (/doc/:id)
+## Document Functionality
+- [x] **Create Documents** - Document creation and WebSocket connections working
+- [ ] **Edit Documents** - Verify real-time editing works correctly
+- [ ] **Save Documents** - Test autosave and manual save functionality
+- [ ] **Load Documents** - Test document loading from database
+- [ ] **Document Sharing** - Test sharing documents via URL
 
-## Presence System
-- [x] Implement awareness state management
-- [x] Add remote cursor rendering
-- [x] Show user names and colors
-- [x] Display "last saved at" indicator
+## Multi-User Testing
+- [ ] **Two Users Editing** - Test simultaneous editing by two users
+- [ ] **Cursor Tracking** - Verify remote cursors appear correctly
+- [ ] **Conflict Resolution** - Test Yjs conflict resolution with concurrent edits
+- [ ] **User Presence** - Test user names, colors, and presence indicators
+- [ ] **Multiple Documents** - Test multiple documents being edited simultaneously
+- [ ] **User Disconnection** - Test graceful handling of user disconnections
 
-## Polish & Testing
-- [x] Add error handling and reconnection logic
-- [x] Test with multiple browser tabs
-- [x] Add basic UI styling with Tailwind
-- [x] Implement username generation and persistence
+## Performance & Reliability
+- [ ] **Large Documents** - Test with documents containing thousands of lines
+- [ ] **Network Issues** - Test reconnection after network interruptions
+- [ ] **Server Restart** - Test document recovery after server restart
+- [ ] **Memory Usage** - Monitor memory usage with multiple active documents
+- [x] **Error Handling** - Fixed Yjs document structure initialization and message handling
 
-## Environment Setup
-- [ ] Configure Neon database
-- [ ] Set up environment variables (create .env file with DATABASE_URL)
-- [ ] Configure deployment settings
-
-## Critical Missing Items
-- [x] **DATABASE_URL environment variable** - Required for database functionality
-- [x] **Switch to connection pooling** - Updated to use pg with connection pooling for better multi-user performance
-- [x] **Fix WebSocket connection issues** - Added proper error handling and connection state checks
-- [x] **Fix WebSocket URL format** - Updated server to handle y-websocket protocol correctly
-- [ ] **Test the application** - Verify all features work end-to-end
-- [ ] **Build and deploy** - Create production build
+## Production Readiness
+- [ ] **Build Process** - Create production build and test deployment
+- [ ] **Security** - Review and implement security best practices
+- [ ] **Monitoring** - Add logging and monitoring for production use
+- [ ] **Documentation** - Create user and developer documentation
