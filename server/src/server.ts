@@ -1,10 +1,8 @@
 import express from 'express';
 import { WebSocketServer } from 'ws';
-import * as encoding from 'lib0/encoding';
-import * as decoding from 'lib0/decoding';
-import * as syncProtocol from 'y-protocols/sync';
-import * as awarenessProtocol from 'y-protocols/awareness';
+import { neon } from '@neondatabase/serverless';
 import * as Y from 'yjs';
+import { Awareness } from 'y-protocols/awareness';
 import http from 'http';
 import cors from 'cors';
 import path from 'path';
@@ -13,13 +11,20 @@ const app = express();
 app.use(express.json());
 app.use(cors());
 
-// Serve static files from client build
-app.use(express.static(path.join(__dirname, '../../client/dist')));
+// Serve static files from client build (only in production)
+if (process.env.NODE_ENV === 'production') {
+  app.use(express.static(path.join(__dirname, '../../client/dist')));
+}
 
-const sql = neon(process.env.DATABASE_URL || '');
+const sql = process.env.DATABASE_URL ? neon(process.env.DATABASE_URL) : null;
 
 // Initialize database
 async function initDatabase() {
+  if (!sql) {
+    console.log('No database connection - running in demo mode');
+    return;
+  }
+  
   try {
     await sql`
       CREATE TABLE IF NOT EXISTS documents (
@@ -47,17 +52,19 @@ async function getDocument(docId: string): Promise<Y.Doc> {
   const ydoc = new Y.Doc();
   const ytext = ydoc.getText('content');
 
-  try {
-    // Load document from database
-    const result = await sql`
-      SELECT content FROM documents WHERE id = ${docId}
-    `;
-
-    if (result.length > 0 && result[0].content) {
-      ytext.insert(0, result[0].content);
+    if (sql) {
+    try {
+      // Load document from database
+      const result = await sql`
+        SELECT content FROM documents WHERE id = ${docId}
+      `;
+      
+      if (result.length > 0 && result[0].content) {
+        ytext.insert(0, result[0].content);
+      }
+    } catch (error) {
+      console.error('Error loading document:', error);
     }
-  } catch (error) {
-    console.error('Error loading document:', error);
   }
 
   // Auto-save changes with debouncing
@@ -65,18 +72,20 @@ async function getDocument(docId: string): Promise<Y.Doc> {
   ydoc.on('update', () => {
     clearTimeout(saveTimeout);
     saveTimeout = setTimeout(async () => {
-      try {
-        const content = ytext.toString();
-        await sql`
-          INSERT INTO documents (id, content, updated_at)
-          VALUES (${docId}, ${content}, NOW())
-          ON CONFLICT (id) DO UPDATE SET
-            content = EXCLUDED.content,
-            updated_at = EXCLUDED.updated_at
-        `;
-        console.log(`Document ${docId} saved`);
-      } catch (error) {
-        console.error('Error saving document:', error);
+      if (sql) {
+        try {
+          const content = ytext.toString();
+          await sql`
+            INSERT INTO documents (id, content, updated_at)
+            VALUES (${docId}, ${content}, NOW())
+            ON CONFLICT (id) DO UPDATE SET
+              content = EXCLUDED.content,
+              updated_at = EXCLUDED.updated_at
+          `;
+          console.log(`Document ${docId} saved`);
+        } catch (error) {
+          console.error('Error saving document:', error);
+        }
       }
     }, 1000);
   });
@@ -91,24 +100,32 @@ app.get('/api/health', (req, res) => {
 });
 
 app.get('/api/docs/:id/status', async (req, res) => {
+  const { id } = req.params;
+  
+  if (!sql) {
+    return res.json({ lastSaved: null });
+  }
+  
   try {
     const result = await sql`
-      SELECT updated_at FROM documents WHERE id = ${req.params.id}
+      SELECT updated_at FROM documents WHERE id = ${id}
     `;
-
+    
     res.json({
       lastSaved: result.length > 0 ? result[0].updated_at : null
     });
   } catch (error) {
     console.error('Error fetching document status:', error);
-    res.status(500).json({ error: 'Internal server error' });
+    res.status(500).json({ error: 'Failed to fetch document status' });
   }
 });
 
-// Catch-all handler for SPA routing
-app.get('*', (req, res) => {
-  res.sendFile(path.join(__dirname, '../../client/dist/index.html'));
-});
+// Catch-all handler for SPA routing (only in production)
+if (process.env.NODE_ENV === 'production') {
+  app.get('*', (req, res) => {
+    res.sendFile(path.join(__dirname, '../../client/dist/index.html'));
+  });
+}
 
 // Create HTTP server
 const server = http.createServer(app);
@@ -121,38 +138,29 @@ const wss = new WebSocketServer({
 
 // Custom WebSocket connection handler
 function setupWSConnection(ws: any, req: any, { docName, doc }: { docName: string, doc: Y.Doc }) {
-  const client = { ws, doc };
-  const awareness = new awarenessProtocol.Awareness(doc)
+  const awareness = new Awareness(doc);
   
   ws.on('message', (message: Uint8Array) => {
-    const update = decoding.decodeSync(message);
-    if (Y.isUpdate(update)) {
-      Y.applyUpdate(doc, update);
-    } else if (awarenessProtocol.isAwarenessUpdate(update)) {
-      awarenessProtocol.applyAwarenessUpdate(awareness, update, ws)
+    try {
+      // Handle Yjs updates
+      Y.applyUpdate(doc, message);
+    } catch (error) {
+      console.error('Error applying update:', error);
     }
   });
 
   // Send initial document state
-  const syncResponse = encoding.encode(syncProtocol.encodeStateAsUpdate(doc));
-  ws.send(syncResponse);
-
-  // Send awareness information
-  awareness.setLocalState(null) // Set initial state to null
-  const awarenessUpdate = encoding.encode(awarenessProtocol.encodeAwarenessUpdate(awareness, Array.from(awareness.getNodes())));
-  ws.send(awarenessUpdate);
+  const state = Y.encodeStateAsUpdate(doc);
+  ws.send(state);
 
   // Handle awareness changes
-  awareness.on('update', (updatedAwareness: Uint8Array, origin: any) => {
-    if (origin !== client) {
-      ws.send(encoding.encode(updatedAwareness));
-    }
+  awareness.on('update', (update: Uint8Array) => {
+    ws.send(update);
   });
 
   ws.on('close', () => {
     console.log(`Client disconnected from room: ${docName}`);
     awareness.destroy();
-    // Potentially remove the doc from memory if no clients are connected
   });
 
   ws.on('error', (error: Error) => {
@@ -164,7 +172,7 @@ function setupWSConnection(ws: any, req: any, { docName, doc }: { docName: strin
 
 wss.on('connection', (ws, req) => {
   const url = new URL(req.url!, `http://${req.headers.host}`);
-  const docId = url.searchParams.get('room');
+  const docId = url.searchParams.get('room') || url.searchParams.get('d');
 
   if (!docId) {
     ws.close(1008, 'Missing room parameter');
@@ -185,11 +193,11 @@ wss.on('connection', (ws, req) => {
   });
 });
 
-const PORT = process.env.PORT || 5000;
+const PORT = process.env.PORT || 5001;
 
 // Initialize database and start server
 initDatabase().then(() => {
-  server.listen(PORT, '0.0.0.0', () => {
+  server.listen(Number(PORT), '0.0.0.0', () => {
     console.log(`Server running on port ${PORT}`);
   });
 });

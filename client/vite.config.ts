@@ -9,9 +9,9 @@ export default defineConfig({
     port: 3000,
     allowedHosts: true,
     proxy: {
-      '/api': 'http://localhost:5000',
+      '/api': 'http://localhost:5001',
       '/collab': {
-        target: 'ws://localhost:5000',
+        target: 'ws://localhost:5001',
         ws: true
       }
     }

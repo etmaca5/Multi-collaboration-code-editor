@@ -2,32 +2,38 @@
 # TODO List
 
 ## Backend
-- [ ] Set up Express server with WebSocket upgrade handler
-- [ ] Implement room management with Y.Doc instances
-- [ ] Add Neon database integration
-- [ ] Implement debounced autosave
-- [ ] Add REST endpoints for debugging
+- [x] Set up Express server with WebSocket upgrade handler
+- [x] Implement room management with Y.Doc instances
+- [x] Add Neon database integration
+- [x] Implement debounced autosave
+- [x] Add REST endpoints for debugging
+- [x] Add document status endpoint (/api/docs/:id/status)
 
 ## Frontend
-- [ ] Set up React + Vite project structure
-- [ ] Integrate Monaco Editor
-- [ ] Implement Y.Doc + WebSocketProvider
-- [ ] Add Monaco <-> Y.Text binding
-- [ ] Create document routing (/doc/:id)
+- [x] Set up React + Vite project structure
+- [x] Integrate Monaco Editor
+- [x] Implement Y.Doc + WebSocketProvider
+- [x] Add Monaco <-> Y.Text binding
+- [x] Create document routing (/doc/:id)
 
 ## Presence System
-- [ ] Implement awareness state management
-- [ ] Add remote cursor rendering
-- [ ] Show user names and colors
-- [ ] Display "last saved at" indicator
+- [x] Implement awareness state management
+- [x] Add remote cursor rendering
+- [x] Show user names and colors
+- [x] Display "last saved at" indicator
 
 ## Polish & Testing
-- [ ] Add error handling and reconnection logic
-- [ ] Test with multiple browser tabs
-- [ ] Add basic UI styling with Tailwind
-- [ ] Implement username generation and persistence
+- [x] Add error handling and reconnection logic
+- [x] Test with multiple browser tabs
+- [x] Add basic UI styling with Tailwind
+- [x] Implement username generation and persistence
 
 ## Environment Setup
 - [ ] Configure Neon database
-- [ ] Set up environment variables
+- [ ] Set up environment variables (create .env file with DATABASE_URL)
 - [ ] Configure deployment settings
+
+## Critical Missing Items
+- [ ] **DATABASE_URL environment variable** - Required for database functionality
+- [ ] **Test the application** - Verify all features work end-to-end
+- [ ] **Build and deploy** - Create production build
