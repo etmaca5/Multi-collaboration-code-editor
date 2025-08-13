@@ -33,11 +33,15 @@
 ## Testing & Quality Assurance
 - [ ] **Multi-user Testing** - Test with multiple users editing simultaneously
 - [ ] **Connection Recovery** - Test reconnection after network issues
-- [ ] **Large Document Handling** - Test with large documents
-- [ ] **Cross-browser Testing** - Test in different browsers
-- [ ] **Mobile Testing** - Test on mobile devices
+
+
 
 ## Next Steps
+- [ ] **Folder Support** - Add ability to create and organize files in folders
+- [ ] **Code Compilation** - Add terminal for running and compiling code
+- [ ] **Code Refactoring** - Clean up and optimize the codebase
+- [ ] **Console Bug Fixes** - Fix Yjs corruption errors and WebSocket issues
+- [ ] **Testing Suite** - Create comprehensive testing framework
 - [ ] **Document Management** - Add document deletion, renaming, and organization
 - [ ] **User Authentication** - Add user accounts and authentication
 - [ ] **Document Permissions** - Add read-only and edit permissions
@@ -57,8 +61,10 @@
 
 ## Current Status
 ✅ **MVP Complete** - Basic collaborative editor is working with real-time typing and editing
-✅ **Servers Running** - Both client (port 3000) and server (port 5001) are operational
+✅ **Servers Running** - Both client (port 5173) and server (port 5001) are operational
 ✅ **WebSocket Working** - Real-time collaboration is functional
 ✅ **Database Connected** - Document persistence is working
+✅ **File Management** - API endpoints for creating/deleting files working
+❌ **Yjs Corruption** - Serious Yjs corruption errors causing WebSocket failures
 
-**Next Priority**: Test multi-user collaboration and add document management features
+**Next Priority**: Fix Yjs corruption errors before adding new features
