@@ -223,11 +223,11 @@ wss.on('connection', (ws, req) => {
     const url = new URL(req.url!, `http://${req.headers.host}`);
     
     // Extract document ID from the path
-    // y-websocket sends: /collab/{docId}
-    const pathParts = url.pathname.split('/');
-    const docId = pathParts[pathParts.length - 1];
+    // y-websocket v3 sends: /{docId}
+    const pathParts = url.pathname.split('/').filter(part => part.length > 0);
+    const docId = pathParts[0]; // First part is the document ID
 
-    if (!docId || docId === 'collab') {
+    if (!docId) {
       console.log('WebSocket connection attempt without valid document ID:', req.url);
       ws.close(1008, 'Missing document ID');
       return;

@@ -31,15 +31,18 @@ function CollabEditor({ docId, username }: Props) {
   const monacoRef = useRef<any>()
   const [remoteUsers, setRemoteUsers] = useState<RemoteUser[]>([])
   const [isConnected, setIsConnected] = useState(false)
+  const [isEditorReady, setIsEditorReady] = useState(false)
 
   useEffect(() => {
+    console.log('CollabEditor: Initializing Yjs document for docId:', docId)
+    
     // Initialize Yjs document
     const ydoc = new Y.Doc()
     const ytext = ydoc.getText('content')
     
-    // Create WebSocket provider
+    // Create WebSocket provider with the correct URL format for v3
     const provider = new WebsocketProvider(
-      'ws://localhost:5001/collab', // Use the correct server path
+      'ws://localhost:5001',
       docId,
       ydoc
     )
@@ -66,6 +69,7 @@ function CollabEditor({ docId, username }: Props) {
 
     // Handle connection status
     provider.on('status', ({ status }: { status: string }) => {
+      console.log('CollabEditor: WebSocket status:', status)
       setIsConnected(status === 'connected')
     })
 
@@ -75,17 +79,23 @@ function CollabEditor({ docId, username }: Props) {
     ytextRef.current = ytext
 
     return () => {
+      if (bindingRef.current) {
+        bindingRef.current.destroy()
+      }
       provider.destroy()
       ydoc.destroy()
     }
   }, [docId, username])
 
   const handleEditorDidMount = (editor: any, monaco: any) => {
+    console.log('CollabEditor: Editor mounted successfully')
     editorRef.current = editor
     monacoRef.current = monaco
+    setIsEditorReady(true)
 
-    // Only create binding if we have the Yjs document ready
+    // Create binding if we have the Yjs document ready
     if (ytextRef.current && providerRef.current) {
+      console.log('CollabEditor: Creating Monaco binding')
       const model = editor.getModel()
       const binding = new MonacoBinding(
         ytextRef.current,
@@ -98,14 +108,31 @@ function CollabEditor({ docId, username }: Props) {
   }
 
   const handleEditorWillMount = (monaco: any) => {
+    console.log('CollabEditor: Editor will mount')
     monacoRef.current = monaco
   }
 
+  // Create binding when both editor and Yjs are ready
+  useEffect(() => {
+    if (isEditorReady && ytextRef.current && providerRef.current && editorRef.current && !bindingRef.current) {
+      console.log('CollabEditor: Creating delayed Monaco binding')
+      const model = editorRef.current.getModel()
+      const binding = new MonacoBinding(
+        ytextRef.current,
+        model,
+        new Set([editorRef.current]),
+        providerRef.current.awareness
+      )
+      bindingRef.current = binding
+    }
+  }, [isEditorReady])
+
+  console.log('CollabEditor: Rendering with isConnected:', isConnected, 'isEditorReady:', isEditorReady)
+
   return (
-    <div className="flex flex-col h-full">
-      <div className="flex items-center justify-between p-4 border-b">
+    <div className="flex flex-col h-full bg-white" style={{ height: '100vh' }}>
+      <div className="flex items-center justify-between p-4 border-b border-gray-200 bg-gray-50">
         <div className="flex items-center space-x-4">
-          <h2 className="text-xl font-semibold">Document: {docId}</h2>
           <div className={`w-3 h-3 rounded-full ${isConnected ? 'bg-green-500' : 'bg-red-500'}`}></div>
           <span className="text-sm text-gray-600">
             {isConnected ? 'Connected' : 'Connecting...'}
@@ -133,18 +160,31 @@ function CollabEditor({ docId, username }: Props) {
         </div>
       </div>
       
-      <div className="flex-1">
+      <div className="flex-1" style={{ height: 'calc(100vh - 80px)', minHeight: '400px' }}>
         <Editor
           height="100%"
-          defaultLanguage="javascript"
-          defaultValue="// Start typing here..."
+          defaultLanguage="markdown"
+          defaultValue="Start typing here..."
           onMount={handleEditorDidMount}
           beforeMount={handleEditorWillMount}
           options={{
             minimap: { enabled: false },
             fontSize: 14,
             wordWrap: 'on',
-            automaticLayout: true
+            automaticLayout: true,
+            theme: 'vs',
+            scrollBeyondLastLine: false,
+            lineNumbers: 'on',
+            renderWhitespace: 'selection',
+            selectOnLineNumbers: true,
+            roundedSelection: false,
+            readOnly: false,
+            cursorStyle: 'line',
+            contextmenu: true,
+            mouseWheelZoom: true,
+            quickSuggestions: true,
+            suggestOnTriggerCharacters: true,
+            acceptSuggestionOnEnter: 'on'
           }}
         />
       </div>

@@ -17,6 +17,8 @@ function DocumentEditor() {
   const [status, setStatus] = useState<DocumentStatus>({ isLoading: true })
   const [copied, setCopied] = useState(false)
 
+  console.log('DocumentEditor: Rendering with id:', id, 'username:', username, 'status:', status)
+
   useEffect(() => {
     if (!id) {
       navigate('/')
@@ -27,6 +29,7 @@ function DocumentEditor() {
     fetch(`http://localhost:5001/api/docs/${id}/status`)
       .then(res => res.json())
       .then(data => {
+        console.log('DocumentEditor: Document status loaded:', data)
         setStatus({
           isLoading: false,
           lastSaved: data.lastSaved
@@ -127,7 +130,7 @@ function DocumentEditor() {
       </header>
 
       {/* Editor */}
-      <div className="flex-1">
+      <div className="flex-1" style={{ height: 'calc(100vh - 80px)' }}>
         <CollabEditor docId={id} username={username} />
       </div>
     </div>
