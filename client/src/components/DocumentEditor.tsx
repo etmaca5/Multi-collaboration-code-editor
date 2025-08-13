@@ -3,7 +3,6 @@ import React, { useEffect, useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import CollabEditor from './CollabEditor'
 import FileExplorer from './FileExplorer'
-import CollaborativeFileList from './CollaborativeFileList'
 import { getUsername } from '../utils/username'
 
 interface File {
@@ -108,23 +107,47 @@ function DocumentEditor() {
     return date.toLocaleDateString()
   }
 
-  const handleAddFile = (name: string, language: string) => {
-    // Use the collaborative file list to add files
-    if ((window as any).addFileToProject) {
-      (window as any).addFileToProject(name, language)
+  const handleAddFile = async (name: string, language: string) => {
+    try {
+      const response = await fetch(`http://localhost:5001/api/projects/${id}/files`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ name, language }),
+      })
+
+      if (!response.ok) {
+        throw new Error('Failed to create file')
+      }
+
+      const newFile = await response.json()
+      setFiles(prev => [...prev, newFile])
+      setSelectedFileId(newFile.id)
+    } catch (error) {
+      console.error('Error creating file:', error)
     }
   }
 
-  const handleDeleteFile = (fileId: string) => {
-    // Use the collaborative file list to delete files
-    if ((window as any).deleteFileFromProject) {
-      (window as any).deleteFileFromProject(fileId)
-    }
-    
-    // If we deleted the currently selected file, select the first available file
-    if (selectedFileId === fileId) {
-      const remainingFiles = files.filter(f => f.id !== fileId)
-      setSelectedFileId(remainingFiles.length > 0 ? remainingFiles[0].id : null)
+  const handleDeleteFile = async (fileId: string) => {
+    try {
+      const response = await fetch(`http://localhost:5001/api/files/${fileId}`, {
+        method: 'DELETE',
+      })
+
+      if (!response.ok) {
+        throw new Error('Failed to delete file')
+      }
+
+      setFiles(prev => prev.filter(f => f.id !== fileId))
+      
+      // If we deleted the currently selected file, select the first available file
+      if (selectedFileId === fileId) {
+        const remainingFiles = files.filter(f => f.id !== fileId)
+        setSelectedFileId(remainingFiles.length > 0 ? remainingFiles[0].id : null)
+      }
+    } catch (error) {
+      console.error('Error deleting file:', error)
     }
   }
 
@@ -235,15 +258,7 @@ function DocumentEditor() {
         </div>
       </div>
 
-      {/* Collaborative File List - hidden component for syncing file changes */}
-      {project && (
-        <CollaborativeFileList
-          projectId={id}
-          onFilesChange={setFiles}
-          onAddFile={handleAddFile}
-          onDeleteFile={handleDeleteFile}
-        />
-      )}
+      {/* File management is now handled through direct API calls */}
     </div>
   )
 }

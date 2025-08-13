@@ -20,9 +20,9 @@ function FileExplorer({ files, selectedFileId, onFileSelect, onAddFile, onDelete
   const [newFileName, setNewFileName] = useState('')
   const [newFileLanguage, setNewFileLanguage] = useState('markdown')
 
-  const handleAddFile = () => {
+  const handleAddFile = async () => {
     if (newFileName.trim()) {
-      onAddFile(newFileName.trim(), newFileLanguage)
+      await onAddFile(newFileName.trim(), newFileLanguage)
       setNewFileName('')
       setNewFileLanguage('markdown')
       setShowAddForm(false)
@@ -80,9 +80,9 @@ function FileExplorer({ files, selectedFileId, onFileSelect, onAddFile, onDelete
               onChange={(e) => setNewFileName(e.target.value)}
               placeholder="File name (e.g., index.js)"
               className="w-full bg-gray-700 border border-gray-600 rounded px-3 py-2 text-white placeholder-gray-400 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500"
-              onKeyPress={(e) => {
+              onKeyPress={async (e) => {
                 if (e.key === 'Enter') {
-                  handleAddFile()
+                  await handleAddFile()
                 }
               }}
             />
@@ -101,7 +101,7 @@ function FileExplorer({ files, selectedFileId, onFileSelect, onAddFile, onDelete
             </select>
             <div className="flex space-x-2">
               <button
-                onClick={handleAddFile}
+                onClick={async () => await handleAddFile()}
                 className="flex-1 bg-blue-600 hover:bg-blue-700 text-white px-3 py-2 rounded text-sm transition-colors"
               >
                 Add
@@ -139,9 +139,9 @@ function FileExplorer({ files, selectedFileId, onFileSelect, onAddFile, onDelete
                 </div>
                 {files.length > 1 && (
                   <button
-                    onClick={(e) => {
+                    onClick={async (e) => {
                       e.stopPropagation()
-                      onDeleteFile(file.id)
+                      await onDeleteFile(file.id)
                     }}
                     className="text-gray-400 hover:text-red-400 transition-colors opacity-0 group-hover:opacity-100"
                     title="Delete file"

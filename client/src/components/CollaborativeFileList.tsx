@@ -35,15 +35,30 @@ function CollaborativeFileList({ projectId, onFilesChange, onAddFile, onDeleteFi
       ydoc
     )
 
-    // Handle file list updates
-    yfiles.observe(event => {
-      const files: File[] = yfiles.toArray().map(item => ({
-        id: item.id,
-        name: item.name,
-        path: item.path,
-        language: item.language
-      }))
-      onFilesChange(files)
+    // Wait for the provider to be ready before setting up observers
+    provider.on('sync', (isSynced: boolean) => {
+      if (isSynced) {
+        console.log('CollaborativeFileList: Synced with server')
+        // Initial sync is complete, now safe to observe changes
+        yfiles.observe(event => {
+          const files: File[] = yfiles.toArray().map(item => ({
+            id: item.id,
+            name: item.name,
+            path: item.path,
+            language: item.language
+          }))
+          onFilesChange(files)
+        })
+        
+        // Trigger initial file list update
+        const files: File[] = yfiles.toArray().map(item => ({
+          id: item.id,
+          name: item.name,
+          path: item.path,
+          language: item.language
+        }))
+        onFilesChange(files)
+      }
     })
 
     // Store references
@@ -61,25 +76,43 @@ function CollaborativeFileList({ projectId, onFilesChange, onAddFile, onDeleteFi
     }
   }, [projectId, onFilesChange])
 
-  const handleAddFile = (name: string, language: string) => {
-    if (yfilesRef.current) {
-      const fileId = `file-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`
-      yfilesRef.current.push([{
-        id: fileId,
-        name,
-        path: name,
-        language
-      }])
+  const handleAddFile = async (name: string, language: string) => {
+    try {
+      // Create file through the server API to ensure proper database integration
+      const response = await fetch(`http://localhost:5001/api/projects/${projectId}/files`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ name, language }),
+      })
+
+      if (!response.ok) {
+        throw new Error('Failed to create file')
+      }
+
+      // The collaborative file list will be updated automatically through the sync
+      console.log('File created successfully')
+    } catch (error) {
+      console.error('Error creating file:', error)
     }
   }
 
-  const handleDeleteFile = (fileId: string) => {
-    if (yfilesRef.current) {
-      const files = yfilesRef.current.toArray()
-      const index = files.findIndex(file => file.id === fileId)
-      if (index !== -1) {
-        yfilesRef.current.delete(index, 1)
+  const handleDeleteFile = async (fileId: string) => {
+    try {
+      // Delete file through the server API to ensure proper database integration
+      const response = await fetch(`http://localhost:5001/api/files/${fileId}`, {
+        method: 'DELETE',
+      })
+
+      if (!response.ok) {
+        throw new Error('Failed to delete file')
       }
+
+      // The collaborative file list will be updated automatically through the sync
+      console.log('File deleted successfully')
+    } catch (error) {
+      console.error('Error deleting file:', error)
     }
   }
 

@@ -209,6 +209,10 @@ async function getProjectFileList(projectId: string): Promise<Y.Doc> {
         [projectId]
       );
       
+      // Clear any existing content first
+      yfiles.delete(0, yfiles.length);
+      
+      // Add files one by one
       result.rows.forEach(file => {
         yfiles.push([{
           id: file.id,
@@ -221,12 +225,6 @@ async function getProjectFileList(projectId: string): Promise<Y.Doc> {
       console.error('Error loading project files:', error);
     }
   }
-
-  // Auto-save file list changes to database
-  ydoc.on('update', () => {
-    // This will be handled by the file management endpoints
-    console.log(`Project ${projectId} file list updated`);
-  });
 
   projectFileLists.set(projectId, ydoc);
   return ydoc;
@@ -318,21 +316,34 @@ app.post('/api/projects/:projectId/files', async (req, res) => {
   
   try {
     const fileId = generateFileId();
-    const path = name; // Use name as path for now
+    // Make path unique by adding timestamp if needed
+    let path = name.trim();
+    let counter = 1;
+    
+    // Check if path already exists and make it unique
+    while (true) {
+      const existingFile = await pool.query(
+        'SELECT id FROM files WHERE project_id = $1 AND path = $2',
+        [projectId, path]
+      );
+      
+      if (existingFile.rows.length === 0) {
+        break; // Path is unique
+      }
+      
+      // Add counter to make it unique
+      const nameWithoutExt = name.replace(/\.[^/.]+$/, '');
+      const ext = name.match(/\.[^/.]+$/)?.[0] || '';
+      path = `${nameWithoutExt}_${counter}${ext}`;
+      counter++;
+    }
+    
     const result = await pool.query(
       'INSERT INTO files (id, project_id, name, path, content, language) VALUES ($1, $2, $3, $4, $5, $6) RETURNING *',
       [fileId, projectId, name.trim(), path, '', language]
     );
     
-    // Update the collaborative file list
-    const fileListDoc = await getProjectFileList(projectId);
-    const yfiles = fileListDoc.getArray('files');
-    yfiles.push([{
-      id: fileId,
-      name: name.trim(),
-      path: path,
-      language: language
-    }]);
+    // Note: Collaborative file list will be updated by the client
     
     res.json(result.rows[0]);
   } catch (error) {
@@ -367,14 +378,7 @@ app.delete('/api/files/:fileId', async (req, res) => {
       [fileId]
     );
     
-    // Update the collaborative file list
-    const fileListDoc = await getProjectFileList(projectId);
-    const yfiles = fileListDoc.getArray('files');
-    const files = yfiles.toArray();
-    const index = files.findIndex((file: any) => file.id === fileId);
-    if (index !== -1) {
-      yfiles.delete(index, 1);
-    }
+    // Note: Collaborative file list will be updated by the client
     
     res.json({ success: true });
   } catch (error) {
@@ -448,7 +452,7 @@ function setupWSConnection(ws: any, req: any, { docName, doc }: { docName: strin
 
   // Handle awareness updates
   awareness.on('update', (update: Uint8Array) => {
-    if (ws.readyState === ws.OPEN) {
+    if (ws.readyState === ws.OPEN && update && update.length > 0) {
       try {
         ws.send(update);
       } catch (error) {
@@ -502,40 +506,21 @@ wss.on('connection', (ws, req) => {
 
     console.log(`Client connected to room: ${docId}${fileId ? `:${fileId}` : ''}`);
 
-    // Check if this is a project file list connection
-    if (docId.endsWith('-files')) {
-      const projectId = docId.replace('-files', '');
-      getProjectFileList(projectId).then(ydoc => {
-        try {
-          setupWSConnection(ws, req, {
-            docName: docAndFile,
-            doc: ydoc
-          });
-        } catch (error) {
-          console.error('Error in setupWSConnection:', error);
-          ws.close(1011, 'Internal server error');
-        }
-      }).catch(error => {
-        console.error('Error getting project file list:', error);
+    // Get or create document and setup connection
+    getDocument(docId, fileId).then(ydoc => {
+      try {
+        setupWSConnection(ws, req, {
+          docName: docAndFile,
+          doc: ydoc
+        });
+      } catch (error) {
+        console.error('Error in setupWSConnection:', error);
         ws.close(1011, 'Internal server error');
-      });
-    } else {
-      // Get or create document and setup connection
-      getDocument(docId, fileId).then(ydoc => {
-        try {
-          setupWSConnection(ws, req, {
-            docName: docAndFile,
-            doc: ydoc
-          });
-        } catch (error) {
-          console.error('Error in setupWSConnection:', error);
-          ws.close(1011, 'Internal server error');
-        }
-      }).catch(error => {
-        console.error('Error getting document:', error);
-        ws.close(1011, 'Internal server error');
-      });
-    }
+      }
+    }).catch(error => {
+      console.error('Error getting document:', error);
+      ws.close(1011, 'Internal server error');
+    });
   } catch (error) {
     console.error('Error in WebSocket connection handler:', error);
     ws.close(1011, 'Internal server error');
