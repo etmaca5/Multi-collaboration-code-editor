@@ -42,7 +42,7 @@ function CollabEditor({ docId, username }: Props) {
     
     // Create WebSocket provider with the correct URL format for v1.5.0
     const provider = new WebsocketProvider(
-      'ws://localhost:5001/collab',
+      'ws://10.19.201.44:5001/collab',
       docId,
       ydoc
     )
