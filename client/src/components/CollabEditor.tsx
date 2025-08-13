@@ -8,6 +8,8 @@ import { MonacoBinding } from 'y-monaco'
 interface Props {
   docId: string
   username: string
+  fileId?: string
+  language?: string
 }
 
 interface RemoteUser {
@@ -22,7 +24,7 @@ interface RemoteUser {
   }
 }
 
-function CollabEditor({ docId, username }: Props) {
+function CollabEditor({ docId, username, fileId, language = 'markdown' }: Props) {
   const ydocRef = useRef<Y.Doc>()
   const providerRef = useRef<WebsocketProvider>()
   const ytextRef = useRef<Y.Text>()
@@ -34,16 +36,31 @@ function CollabEditor({ docId, username }: Props) {
   const [isEditorReady, setIsEditorReady] = useState(false)
 
   useEffect(() => {
-    console.log('CollabEditor: Initializing Yjs document for docId:', docId)
+    console.log('CollabEditor: Initializing Yjs document for docId:', docId, 'fileId:', fileId)
+    
+    // Clean up previous connections first
+    if (bindingRef.current) {
+      bindingRef.current.destroy()
+      bindingRef.current = undefined
+    }
+    if (providerRef.current) {
+      providerRef.current.destroy()
+      providerRef.current = undefined
+    }
+    if (ydocRef.current) {
+      ydocRef.current.destroy()
+      ydocRef.current = undefined
+    }
     
     // Initialize Yjs document
     const ydoc = new Y.Doc()
     const ytext = ydoc.getText('content')
     
     // Create WebSocket provider with the correct URL format for v1.5.0
+    const docKey = fileId ? `${docId}:${fileId}` : docId
     const provider = new WebsocketProvider(
-      'ws://10.19.201.44:5001/collab',
-      docId,
+      'ws://localhost:5001/collab',
+      docKey,
       ydoc
     )
 
@@ -79,13 +96,21 @@ function CollabEditor({ docId, username }: Props) {
     ytextRef.current = ytext
 
     return () => {
+      // Clean up in reverse order
       if (bindingRef.current) {
         bindingRef.current.destroy()
+        bindingRef.current = undefined
       }
-      provider.destroy()
-      ydoc.destroy()
+      if (providerRef.current) {
+        providerRef.current.destroy()
+        providerRef.current = undefined
+      }
+      if (ydocRef.current) {
+        ydocRef.current.destroy()
+        ydocRef.current = undefined
+      }
     }
-  }, [docId, username])
+  }, [docId, fileId, username])
 
   const handleEditorDidMount = (editor: any, monaco: any) => {
     console.log('CollabEditor: Editor mounted successfully')
@@ -163,7 +188,7 @@ function CollabEditor({ docId, username }: Props) {
       <div className="flex-1" style={{ height: 'calc(100vh - 80px)', minHeight: '400px' }}>
         <Editor
           height="100%"
-          defaultLanguage="markdown"
+          defaultLanguage={language}
           defaultValue="Start typing here..."
           onMount={handleEditorDidMount}
           beforeMount={handleEditorWillMount}

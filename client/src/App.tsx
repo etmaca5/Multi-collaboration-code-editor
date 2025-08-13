@@ -9,6 +9,7 @@ function App() {
     <div className="min-h-screen bg-gray-900">
       <Routes>
         <Route path="/" element={<HomePage />} />
+        <Route path="/project/:id" element={<DocumentEditor />} />
         <Route path="/doc/:id" element={<DocumentEditor />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>

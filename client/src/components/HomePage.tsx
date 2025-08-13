@@ -6,14 +6,34 @@ function HomePage() {
   const [docId, setDocId] = useState('')
   const navigate = useNavigate()
 
-  const handleCreateNew = () => {
-    const newId = generateDocId()
-    navigate(`/doc/${newId}`)
+  const handleCreateNew = async () => {
+    try {
+      const response = await fetch('http://localhost:5001/api/projects', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ name: 'New Project' }),
+      })
+
+      if (!response.ok) {
+        throw new Error('Failed to create project')
+      }
+
+      const project = await response.json()
+      navigate(`/project/${project.id}`)
+    } catch (error) {
+      console.error('Error creating project:', error)
+      // Fallback to old document format
+      const newId = generateDocId()
+      navigate(`/doc/${newId}`)
+    }
   }
 
   const handleJoinExisting = () => {
     if (docId.trim()) {
-      navigate(`/doc/${docId.trim()}`)
+      // Try project first, then fallback to document
+      navigate(`/project/${docId.trim()}`)
     }
   }
 
@@ -34,7 +54,7 @@ function HomePage() {
             Collaborative Code Editor
           </h1>
           <p className="text-gray-400">
-            Create or join a document to start coding together
+            Create or join a project to start coding together
           </p>
         </div>
 
@@ -43,7 +63,7 @@ function HomePage() {
             onClick={handleCreateNew}
             className="w-full bg-blue-600 hover:bg-blue-700 text-white font-medium py-3 px-4 rounded-lg transition duration-200"
           >
-            Create New Document
+            Create New Editor
           </button>
 
           <div className="relative">
@@ -60,7 +80,7 @@ function HomePage() {
               type="text"
               value={docId}
               onChange={(e) => setDocId(e.target.value)}
-              placeholder="Enter document ID"
+              placeholder="Enter project ID"
               className="w-full bg-gray-700 border border-gray-600 rounded-lg px-4 py-3 text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500"
               onKeyPress={(e) => {
                 if (e.key === 'Enter') {
@@ -73,14 +93,14 @@ function HomePage() {
               disabled={!docId.trim()}
               className="w-full bg-gray-600 hover:bg-gray-700 disabled:bg-gray-700 disabled:opacity-50 text-white font-medium py-3 px-4 rounded-lg transition duration-200"
             >
-              Join Existing Document
+              Join Existing Project
             </button>
           </div>
         </div>
 
         <div className="mt-8 text-center">
           <p className="text-sm text-gray-500">
-            Share the document URL to collaborate with others
+            Share the project URL to collaborate with others
           </p>
         </div>
       </div>
