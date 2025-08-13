@@ -154,26 +154,25 @@ if (process.env.NODE_ENV === 'production') {
 // Create HTTP server
 const server = http.createServer(app);
 
-// WebSocket server for collaboration - handle all paths
+// WebSocket server for collaboration
 const wss = new WebSocketServer({
   server
 });
 
 // Simple WebSocket connection handler
 function setupWSConnection(ws: any, req: any, { docName, doc }: { docName: string, doc: Y.Doc }) {
-  // Ensure the document has the required Yjs structure
-  const ytext = doc.getText('content');
-  
   const awareness = new Awareness(doc);
   
-  // Simple message handling - just apply updates
-  ws.on('message', (message: Uint8Array) => {
-    if (ws.readyState === ws.OPEN && message && message.length > 0) {
-      try {
-        Y.applyUpdate(doc, message);
-      } catch (error) {
-        console.error('Error applying update:', error);
-      }
+  // Handle incoming messages - simple approach
+  ws.on('message', (message: Buffer) => {
+    if (ws.readyState !== ws.OPEN || !message || message.length === 0) return;
+    
+    try {
+      // Convert Buffer to Uint8Array if needed
+      const uint8Message = new Uint8Array(message);
+      Y.applyUpdate(doc, uint8Message);
+    } catch (error) {
+      console.error('Error applying update:', error);
     }
   });
 
@@ -187,11 +186,22 @@ function setupWSConnection(ws: any, req: any, { docName, doc }: { docName: strin
 
   // Handle awareness updates
   awareness.on('update', (update: Uint8Array) => {
-    if (ws.readyState === ws.OPEN && update && update.length > 0) {
+    if (ws.readyState === ws.OPEN) {
       try {
         ws.send(update);
       } catch (error) {
         console.error('Error sending awareness update:', error);
+      }
+    }
+  });
+
+  // Handle document updates
+  doc.on('update', (update: Uint8Array, origin: any) => {
+    if (origin !== ws && ws.readyState === ws.OPEN) {
+      try {
+        ws.send(update);
+      } catch (error) {
+        console.error('Error sending document update:', error);
       }
     }
   });
@@ -207,39 +217,25 @@ function setupWSConnection(ws: any, req: any, { docName, doc }: { docName: strin
   });
 }
 
-
 wss.on('connection', (ws, req) => {
   try {
     console.log('WebSocket connection attempt:', req.url);
     const url = new URL(req.url!, `http://${req.headers.host}`);
     
-    // Only handle /collab paths
-    if (!url.pathname.startsWith('/collab')) {
-      console.log('WebSocket connection to non-collab path:', req.url);
-      ws.close(1008, 'Invalid path');
-      return;
-    }
-    
-    let docId = url.searchParams.get('room') || url.searchParams.get('d');
+    // Extract document ID from the path
+    // y-websocket sends: /collab/{docId}
+    const pathParts = url.pathname.split('/');
+    const docId = pathParts[pathParts.length - 1];
 
-    // If no query parameter, try to extract from path
-    if (!docId) {
-      const pathParts = url.pathname.split('/');
-      const lastPart = pathParts[pathParts.length - 1];
-      if (lastPart && lastPart !== 'collab') {
-        docId = lastPart;
-      }
-    }
-
-    if (!docId) {
-      console.log('WebSocket connection attempt without room parameter:', req.url);
-      ws.close(1008, 'Missing room parameter');
+    if (!docId || docId === 'collab') {
+      console.log('WebSocket connection attempt without valid document ID:', req.url);
+      ws.close(1008, 'Missing document ID');
       return;
     }
 
     console.log(`Client connected to room: ${docId}`);
 
-    // Get or create document
+    // Get or create document and setup connection
     getDocument(docId).then(ydoc => {
       try {
         setupWSConnection(ws, req, {
