@@ -40,9 +40,9 @@ function CollabEditor({ docId, username }: Props) {
     const ydoc = new Y.Doc()
     const ytext = ydoc.getText('content')
     
-    // Create WebSocket provider with the correct URL format for v3
+    // Create WebSocket provider with the correct URL format for v1.5.0
     const provider = new WebsocketProvider(
-      'ws://localhost:5001',
+      'ws://localhost:5001/collab',
       docId,
       ydoc
     )

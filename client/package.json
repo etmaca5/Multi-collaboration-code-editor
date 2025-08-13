@@ -14,7 +14,7 @@
     "react-dom": "^18.2.0",
     "react-router-dom": "^6.20.1",
     "y-monaco": "^0.1.6",
-    "y-websocket": "^3.0.0",
+    "y-websocket": "^1.5.4",
     "yjs": "^13.6.8"
   },
   "devDependencies": {

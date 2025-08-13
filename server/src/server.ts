@@ -173,6 +173,7 @@ function setupWSConnection(ws: any, req: any, { docName, doc }: { docName: strin
       Y.applyUpdate(doc, uint8Message);
     } catch (error) {
       console.error('Error applying update:', error);
+      // Don't close the connection, just log the error
     }
   });
 
@@ -223,11 +224,11 @@ wss.on('connection', (ws, req) => {
     const url = new URL(req.url!, `http://${req.headers.host}`);
     
     // Extract document ID from the path
-    // y-websocket v3 sends: /{docId}
-    const pathParts = url.pathname.split('/').filter(part => part.length > 0);
-    const docId = pathParts[0]; // First part is the document ID
+    // y-websocket v1.5.0 sends: /collab/{docId}
+    const pathParts = url.pathname.split('/');
+    const docId = pathParts[pathParts.length - 1];
 
-    if (!docId) {
+    if (!docId || docId === 'collab') {
       console.log('WebSocket connection attempt without valid document ID:', req.url);
       ws.close(1008, 'Missing document ID');
       return;
